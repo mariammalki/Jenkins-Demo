@@ -1,128 +1,113 @@
 def dockerImage
 
 pipeline {
-  agent any
+    agent any
 
-  options {
-    timestamps()
-  }
-
-  environment {
-    REGISTRY = "mariem507/demo-jenkins"
-    REGISTRY_CRED = "docker-hub-credentials"
-    IMAGE_TAG = "${env.BUILD_NUMBER}"
-  }
-
-  triggers {
-    pollSCM('H/5 * * * *')
-  }
-
-  stages {
-    stage('Clone Repo') {
-      steps {
-        git branch: 'main', url: 'https://github.com/mariammalki/Jenkins-Demo.git'
-      }
+    options {
+        timestamps()
+        // Timeout global pour éviter que le push Docker bloque indéfiniment
+        timeout(time: 30, unit: 'MINUTES')
     }
 
-    stage('Build App') {
-      steps {
-        sh "mvn -v"
-        sh "mvn clean package -DskipTests"
-      }
+    environment {
+        REGISTRY = "mariem507/demo-jenkins"
+        REGISTRY_CRED = "docker-hub-credentials" // Vérifier que ce credential existe dans Jenkins
+        IMAGE_TAG = "${env.BUILD_NUMBER}"
+        SLACK_CRED = "slack-token" // Vérifier que ce credential existe dans Jenkins
+        SLACK_CHANNEL = "#builds"
     }
 
-    stage('Build Docker image') {
-      steps {
-        script {
-          sh 'docker version'
-          dockerImage = docker.build("${REGISTRY}:${IMAGE_TAG}")
-        }
-      }
+    triggers {
+        pollSCM('H/5 * * * *')
     }
 
-    stage('Push Docker image') {
-      steps {
-        script {
-          try {
-            docker.withRegistry('https://index.docker.io/v1/', REGISTRY_CRED) {
-              dockerImage.push()
+    stages {
+        stage('Clone Repo') {
+            steps {
+                git branch: 'main', url: 'https://github.com/mariammalki/Jenkins-Demo.git'
             }
-          } catch (err) {
-            echo "Push failed: ${err}"
-            currentBuild.result = 'FAILURE'
-            error("Stopping pipeline due to push failure.")
-          }
         }
-      }
+
+        stage('Build App') {
+            steps {
+                sh 'mvn -v'
+                sh 'mvn clean package -DskipTests'
+            }
+        }
+
+        stage('Build Docker image') {
+            steps {
+                script {
+                    sh 'docker version'
+                    dockerImage = docker.build("${REGISTRY}:${IMAGE_TAG}")
+                }
+            }
+        }
+
+        stage('Push Docker image') {
+            steps {
+                script {
+                    docker.withRegistry('https://index.docker.io/v1/', REGISTRY_CRED) {
+                        // Retry push en cas de problème réseau
+                        retry(3) {
+                            dockerImage.push()
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Docker container') {
+            steps {
+                script {
+                    try {
+                        sh """
+                            docker rm -f demo-jenkins || true
+                            docker run -d --name demo-jenkins -p 2222:2222 ${REGISTRY}:${IMAGE_TAG}
+                        """
+                        slackSend(
+                            tokenCredentialId: SLACK_CRED,
+                            channel: SLACK_CHANNEL,
+                            color: "good",
+                            message: "${REGISTRY}:${IMAGE_TAG} - container successfully deployed! :man_dancing:"
+                        )
+                    } catch (err) {
+                        slackSend(
+                            tokenCredentialId: SLACK_CRED,
+                            channel: SLACK_CHANNEL,
+                            color: "danger",
+                            message: "Deployment failed: ${err} :ghost:"
+                        )
+                        error("Deployment failed.")
+                    }
+                }
+            }
+        }
     }
 
-    stage('Deploy Docker container') {
-      steps {
-        script {
-          try {
-            sh """
-              docker rm -f demo-jenkins || true
-              docker run -d --name demo-jenkins -p 2222:2222 ${REGISTRY}:${IMAGE_TAG}
-            """
-            try {
-              slackSend(
-                tokenCredentialId: 'slack-token',
-                channel: '#builds',
-                color: "good",
-                message: "${REGISTRY}:${IMAGE_TAG} - container successfully deployed! :man_dancing:"
-              )
-            } catch (e) {
-              echo "Slack non configuré/indisponible: ${e}"
+    post {
+        always {
+            echo "Pipeline finished with status: ${currentBuild.currentResult}"
+        }
+        success {
+            script {
+                slackSend(
+                    tokenCredentialId: SLACK_CRED,
+                    channel: SLACK_CHANNEL,
+                    color: "good",
+                    message: "Pipeline execution successful! :man_dancing:"
+                )
             }
-          } catch (err) {
-            try {
-              slackSend(
-                tokenCredentialId: 'slack-token',
-                channel: '#builds',
-                color: "danger",
-                message: "Deployment failed: ${err} :ghost:"
-              )
-            } catch (e) {
-              echo "Slack non configuré/indisponible: ${e}"
+        }
+        failure {
+            script {
+                slackSend(
+                    tokenCredentialId: SLACK_CRED,
+                    channel: SLACK_CHANNEL,
+                    color: "danger",
+                    message: "Pipeline execution failed! :ghost:"
+                )
             }
-            error("Deployment failed.")
-          }
         }
-      }
     }
-  }
-
-  post {
-    always {
-      echo "Pipeline finished with status: ${currentBuild.currentResult}"
-    }
-    success {
-      script {
-        try {
-          slackSend(
-            tokenCredentialId: 'slack-token',
-            channel: '#builds',
-            color: "good",
-            message: "Pipeline execution successful! :man_dancing:"
-          )
-        } catch (e) {
-          echo "Slack non configuré/indisponible: ${e}"
-        }
-      }
-    }
-    failure {
-      script {
-        try {
-          slackSend(
-            tokenCredentialId: 'slack-token',
-            channel: '#builds',
-            color: "danger",
-            message: "Pipeline execution failed! :ghost:"
-          )
-        } catch (e) {
-          echo "Slack non configuré/indisponible: ${e}"
-        }
-      }
-    }
-  }
 }
