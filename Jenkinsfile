@@ -1,19 +1,18 @@
 def dockerImage
 
 pipeline {
-    agent any
+    agent any   // ou bien agent { label 'docker' } si ton agent doit avoir Docker installé
 
     options {
         timestamps()
-        // Timeout global pour éviter que le push Docker bloque indéfiniment
         timeout(time: 30, unit: 'MINUTES')
     }
 
     environment {
         REGISTRY = "mariem507/demo-jenkins"
-        REGISTRY_CRED = "docker-hub-credentials" // Vérifier que ce credential existe dans Jenkins
+        REGISTRY_CRED = "docker-hub-credentials"    // doit exister dans Jenkins (ID exact)
         IMAGE_TAG = "${env.BUILD_NUMBER}"
-        SLACK_CRED = "slack-token" // Vérifier que ce credential existe dans Jenkins
+        SLACK_CRED = "slack-token"                  // doit exister dans Jenkins (ID exact)
         SLACK_CHANNEL = "#builds"
     }
 
@@ -35,7 +34,7 @@ pipeline {
             }
         }
 
-        stage('Build Docker image') {
+        stage('Build Docker Image') {
             steps {
                 script {
                     sh 'docker version'
@@ -44,11 +43,10 @@ pipeline {
             }
         }
 
-        stage('Push Docker image') {
+        stage('Push Docker Image') {
             steps {
                 script {
                     docker.withRegistry('https://index.docker.io/v1/', REGISTRY_CRED) {
-                        // Retry push en cas de problème réseau
                         retry(3) {
                             dockerImage.push()
                         }
@@ -57,7 +55,7 @@ pipeline {
             }
         }
 
-        stage('Deploy Docker container') {
+        stage('Deploy Docker Container') {
             steps {
                 script {
                     try {
@@ -65,19 +63,11 @@ pipeline {
                             docker rm -f demo-jenkins || true
                             docker run -d --name demo-jenkins -p 2222:2222 ${REGISTRY}:${IMAGE_TAG}
                         """
-                        slackSend(
-                            tokenCredentialId: SLACK_CRED,
-                            channel: SLACK_CHANNEL,
-                            color: "good",
-                            message: "${REGISTRY}:${IMAGE_TAG} - container successfully deployed! :man_dancing:"
-                        )
+                        slackSend(tokenCredentialId: SLACK_CRED, channel: SLACK_CHANNEL, color: "good",
+                            message: "${REGISTRY}:${IMAGE_TAG} - container successfully deployed! :man_dancing:")
                     } catch (err) {
-                        slackSend(
-                            tokenCredentialId: SLACK_CRED,
-                            channel: SLACK_CHANNEL,
-                            color: "danger",
-                            message: "Deployment failed: ${err} :ghost:"
-                        )
+                        slackSend(tokenCredentialId: SLACK_CRED, channel: SLACK_CHANNEL, color: "danger",
+                            message: "Deployment failed: ${err} :ghost:")
                         error("Deployment failed.")
                     }
                 }
@@ -90,24 +80,12 @@ pipeline {
             echo "Pipeline finished with status: ${currentBuild.currentResult}"
         }
         success {
-            script {
-                slackSend(
-                    tokenCredentialId: SLACK_CRED,
-                    channel: SLACK_CHANNEL,
-                    color: "good",
-                    message: "Pipeline execution successful! :man_dancing:"
-                )
-            }
+            slackSend(tokenCredentialId: SLACK_CRED, channel: SLACK_CHANNEL, color: "good",
+                message: " Pipeline execution successful! ")
         }
         failure {
-            script {
-                slackSend(
-                    tokenCredentialId: SLACK_CRED,
-                    channel: SLACK_CHANNEL,
-                    color: "danger",
-                    message: "Pipeline execution failed! :ghost:"
-                )
-            }
+            slackSend(tokenCredentialId: SLACK_CRED, channel: SLACK_CHANNEL, color: "danger",
+                message: " Pipeline execution failed! ")
         }
     }
 }
